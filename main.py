@@ -1,58 +1,103 @@
 import pulp
+from itertools import product
 
-# Hardkodowane dane
-stock_lengths = [5.5, 4.5, 7,5, 3, 4]
-piece_lengths = [0.6, 0.6, 3, 2.5, 2.7, 2.7, 3,2.7, 2.7, 3,2.7]
+# Dane wejściowe
+stock_lengths = [ 5.5, 4.5]
+piece_lengths = [3, 3, 3, 2.7, 2, 2, 4,1 ,0.6,0.6]
 
 stock_lengths.sort(reverse=True)
 piece_lengths.sort(reverse=True)
 
-print(f"Stock lengths (posortowane): {stock_lengths}")
-print(f"Pieces (posortowane): {piece_lengths}")
+# Maksymalna liczba desek
+max_boards = len(piece_lengths)
 
-# Tworzymy model poprzez pulp
-model = pulp.LpProblem("CuttingStock", pulp.LpMinimize)
+# Model
+model = pulp.LpProblem("CuttingStock_Improved", pulp.LpMinimize)
 
-# Zmienna decyzyjna: ile desek używamy (dla każdego stocka)
-stock_usage = [pulp.LpVariable(f"UseStock_{i}", cat='Binary') for i in range(len(stock_lengths))]
+# Zmienne decyzyjne
+board_used = pulp.LpVariable.dicts("BoardUsed",
+                                   [(i, L) for i in range(max_boards) for L in stock_lengths],
+                                   cat='Binary')
 
-# Zmienna przypisania: który kawałek przypisujemy do której deski
-piece_assignments = [[pulp.LpVariable(f"Assign_{i}_{j}", cat='Binary') for j in range(len(piece_lengths))] for i in range(len(stock_lengths))]
+assignment = pulp.LpVariable.dicts("Assign",
+                                   [(j, i, L) for j in range(len(piece_lengths))
+                                    for i in range(max_boards) for L in stock_lengths],
+                                   cat='Binary')
 
-# Funkcja celu: minimalizujemy liczbę użytych desek
-model += pulp.lpSum(stock_usage), "MinimizeStockUsage"
+# [POMYSŁ 1 - ZMIEŃIONY] Minimalne wykorzystanie deski (60% zamiast 80%)
+min_utilization = 0.6  # Zmniejszone z 0.8
+for i in range(max_boards):
+    for L in stock_lengths:
+        model += pulp.lpSum(
+            assignment[(j, i, L)] * piece_lengths[j]
+            for j in range(len(piece_lengths))
+        ) >= board_used[(i, L)] * L * min_utilization, f"Min_utilization_{i}_{L}"
 
-# Każdy kawałek musi być przypisany dokładnie do jednej deski
+# [POMYSŁ 4 - ZMIEŃIONY] Priorytet dla dłuższych desek (bardziej elastyczny)
+board_preference = {7: 1.2, 5.5: 1.0, 4.5: 0.8}  # Mniejsze różnice w kosztach
+
+# Funkcja celu: głównie minimalizacja odpadu, lekki wpływ preferencji desek
+model += pulp.lpSum(
+    board_used[(i, L)] * L - pulp.lpSum(
+        assignment[(j, i, L)] * piece_lengths[j]
+        for j in range(len(piece_lengths))
+    ) + 0.01 * board_used[(i, L)] * board_preference[L]  # Bardzo mały wpływ kosztu
+    for i in range(max_boards) for L in stock_lengths
+), "MinimizeTotalWaste"
+
+# Ograniczenia podstawowe
 for j in range(len(piece_lengths)):
-    model += pulp.lpSum(piece_assignments[i][j] for i in range(len(stock_lengths))) == 1, f"Piece_{j}_assigned_once"
+    model += pulp.lpSum(
+        assignment[(j, i, L)] for i in range(max_boards) for L in stock_lengths
+    ) == 1, f"Piece_{j}_assigned_once"
 
-# Długość kawałków na desce nie może przekroczyć długości kątownika (jeśli jest użyta)
-for i in range(len(stock_lengths)):
-    model += pulp.lpSum(piece_lengths[j] * piece_assignments[i][j] for j in range(len(piece_lengths))) <= stock_lengths[i] * stock_usage[i], f"Stock_{i}_capacity"
+for i in range(max_boards):
+    for L in stock_lengths:
+        for j in range(len(piece_lengths)):
+            model += assignment[(j, i, L)] <= board_used[(i, L)], f"Assign_{j}_{i}_{L}_only_if_board_used"
 
-# Rozwiązanie modelu
-print("Start solving with PuLP...")
-model.solve()
+for i in range(max_boards):
+    for L in stock_lengths:
+        model += pulp.lpSum(
+            assignment[(j, i, L)] * piece_lengths[j]
+            for j in range(len(piece_lengths))
+        ) <= board_used[(i, L)] * L, f"Board_{i}_{L}_capacity"
 
-print("\n=== Wyniki ===")
+# Rozwiązanie
+print("Rozpoczynam rozwiązanie...")
+solver = pulp.PULP_CBC_CMD(timeLimit=30, msg=True)
+model.solve(solver)
+
+# Wyniki
 if model.status == pulp.LpStatusOptimal:
-    total_stocks = 0
-    total_waste = 0.0
-    deska_nr = 1
-    for i in range(len(stock_lengths)):
-        if pulp.value(stock_usage[i]) > 0.5:  # Jeśli deska jest użyta
-            assigned_pieces = []
-            for j in range(len(piece_lengths)):
-                if pulp.value(piece_assignments[i][j]) > 0.5:
-                    assigned_pieces.append(piece_lengths[j])
-            used_length = stock_lengths[i]
-            total_piece_length = sum(assigned_pieces)
-            waste = used_length - total_piece_length
-            print(f"Deska {deska_nr} (długość {used_length} m): kawałki {assigned_pieces}, odpad: {waste:.2f} m")
-            total_stocks += 1
-            total_waste += waste
-            deska_nr += 1
-    print(f"Łączna liczba kątowników: {total_stocks}")
-    print(f"Łączny odpad: {total_waste:.2f} m")
+    print("\n=== OPTYMALNE ROZWIĄZANIE ===")
+    total_waste = 0
+    total_boards = 0
+
+    for i in range(max_boards):
+        for L in stock_lengths:
+            if pulp.value(board_used[(i, L)]) > 0.5:
+                pieces = []
+                pieces_length = 0
+                for j in range(len(piece_lengths)):
+                    if pulp.value(assignment[(j, i, L)]) > 0.5:
+                        pieces.append(piece_lengths[j])
+                        pieces_length += piece_lengths[j]
+
+                waste = L - pieces_length
+                utilization = pieces_length / L * 100
+                total_waste += waste
+                total_boards += 1
+
+                print(f"Deska {total_boards}: {L}m -> Kawałki: {pieces}")
+                print(f"   Wykorzystanie: {utilization:.1f}%, Odpad: {waste:.2f}m")
+
+    print(f"\nPodsumowanie:")
+    print(f"Użyte deski: {total_boards}")
+    print(f"Łączny odpad: {total_waste:.2f}m")
+    print(f"Całkowita długość kawałków: {sum(piece_lengths):.1f}m")
 else:
-    print("Nie znaleziono optymalnego rozwiązania.")
+    print("Nie znaleziono rozwiązania. Sugerowane zmiany:")
+    print("1. Zmniejsz minimalne wykorzystanie desek (obecnie {min_utilization*100}%)")
+    print("2. Usuń lub złagodź ograniczenie minimalnego wykorzystania")
+    print("3. Zwiększ limit czasu solvera")
