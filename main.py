@@ -69,5 +69,5 @@ def best_fit_with_reuse_and_lookahead(pieces, small_bar=4.5, large_bar=5.5):
 
     return used_bars
 
-pieces = [3, 3, 3, 2.7, 1.8, 2, 4, 1, 0.6, 0.6, 0.5]
+pieces = [2.8, 2.8, 2.8, 2.8, 2.4, 2.4, 0.9, 0.9, 1.6, 1.6, 2.3, 2.3, 3.2, 3.2, 1.4, 1.4, 1.4, 1.4, 2.1, 2.1, 1.8, 1.8, 2.9, 2.9, 1.5, 1.5]
 best_fit_with_reuse_and_lookahead(pieces)
